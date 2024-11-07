@@ -1,0 +1,90 @@
+---
+- name: ansible tasks
+  hosts: workstation
+  become: true
+  vars:
+    source_folder_path: "/home/student/temp"  
+    file_pattern: "myfile.txt"  
+
+  tasks:
+    - block:
+        - name: Create temporary directory
+          ansible.builtin.file:
+            path: /home/student/mytemp
+            state: directory
+
+        - name: Ensure internal work dir exists or not
+          ansible.builtin.file:
+            path: /home/student/mytemp
+            state: directory
+
+      rescue:
+        - name: Error
+          ansible.builtin.debug:
+            msg: "Directory creation failed with RC: {{ ansible_failed_result.rc }}"
+
+    - block:
+        - name: Ensure the file is readable
+          ansible.builtin.file:
+            path: "{{ source_folder_path }}/{{ file_pattern }}"
+            mode: '0444' 
+          delegate_to: bastion
+
+        - name: Copy folder content from bastion to local
+          ansible.builtin.fetch:
+            src: "{{ source_folder_path }}/{{ file_pattern }}"
+            dest: /home/student/mytemp
+            flat: true
+          delegate_to: bastion
+
+      rescue:
+        - name: Error
+          ansible.builtin.debug:
+            msg: "Failed to copy folder content from bastion to local with RC: {{ ansible_failed_result.rc }}"
+
+    - block:
+        - name: Test connectivity to servers
+          ansible.builtin.ping:
+          register: result
+          ignore_errors: yes
+
+      rescue:
+        - name: Error
+          ansible.builtin.debug:
+            msg: "Connectivity test failed with RC: {{ ansible_failed_result.rc }}"
+
+    - block:
+        - name: Check if files exist in source folder
+          ansible.builtin.command:
+              cmd: "ls {{ source_folder_path }}"
+          register: file_check
+          ignore_errors: yes
+
+        - name: Fetch files from jump server
+          ansible.builtin.fetch:
+            src: "{{ source_folder_path }}/*"
+            dest: /home/student/mytemp
+            flat: true
+          delegate_to: bastion
+          when: file_check.rc == 0 and file_check.stdout | length > 0
+
+      rescue:
+        - name: Error
+          ansible.builtin.debug:
+            msg: "No files found in the specified directory with RC: {{ ansible_failed_result.rc }}"
+
+    - name: Upload results to SFS
+      block:
+        - name: Uploading to SFS servers
+          ansible.builtin.copy:
+            src: "{{ source_folder_path }}/{{ file_pattern }}"
+            dest: "/home/student/{{ file_pattern }}"
+          delegate_to: "{{ item }}"
+          loop: "{{ groups['servers'] }}"
+
+      rescue:
+        - name: Error
+          ansible.builtin.debug:
+            msg: "Failed to upload results to SFS with RC: {{ ansible_failed_result.rc }}."
+
+
